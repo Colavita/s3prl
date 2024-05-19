@@ -2250,18 +2250,17 @@ class EncDecBaseConfig:
     learned_pos: bool = field(
         default=False, metadata={"help": "use learned positional embeddings"}
     )
-    # args for "Reducing Transformer Depth on Demand with Structured Dropout" (Fan et al., 2019)
     layerdrop: float = field(default=0, metadata={"help": "LayerDrop probability"})
     layers_to_keep: Optional[List[int]] = field(
-        default=None, metadata={"help": "which layers to *keep* when pruning"}
+        default_factory=lambda: None, metadata={"help": "which layers to *keep* when pruning"}
     )
-
     xformers_att_config: Optional[str] = field(
         default=None,
         metadata={
             "help": "config for xFormers attention, defined in xformers.components.attention.AttentionConfig"
         },
     )
+
 
 
 @dataclass
@@ -2275,7 +2274,6 @@ class DecoderConfig(EncDecBaseConfig):
     )
 
     def __post_init__(self):
-        #  II doesn't work if we are just creating the object outside of hydra so fix that
         if self.input_dim == II("model.decoder.embed_dim"):
             self.input_dim = self.embed_dim
         if self.output_dim == II("model.decoder.embed_dim"):
@@ -2318,14 +2316,12 @@ class TransformerConfig:
         },
     )
     adaptive_input: bool = False
-    encoder: EncDecBaseConfig = EncDecBaseConfig()
-    # TODO should really be in the encoder config
+    encoder: EncDecBaseConfig = field(default_factory=EncDecBaseConfig)
     max_source_positions: int = field(
         default=DEFAULT_MAX_SOURCE_POSITIONS,
         metadata={"help": "Maximum input length supported by the encoder"},
     )
-    decoder: DecoderConfig = DecoderConfig()
-    # TODO should really be in the decoder config
+    decoder: DecoderConfig = field(default_factory=DecoderConfig)
     max_target_positions: int = field(
         default=DEFAULT_MAX_TARGET_POSITIONS,
         metadata={"help": "Maximum output length supported by the decoder"},
@@ -2346,7 +2342,7 @@ class TransformerConfig:
         },
     )
     adaptive_softmax_cutoff: Optional[List[int]] = field(
-        default=None,
+        default_factory=lambda: None,
         metadata={
             "help": "list of adaptive softmax cutoff points. Must be used with adaptive_loss criterion"
         },
@@ -2388,15 +2384,13 @@ class TransformerConfig:
             "help": "checkpoint activations at each layer, then save to gpu. Sets --checkpoint-activations."
         },
     )
-    # args for "Cross+Self-Attention for Transformer Models" (Peitz et al., 2019)
     no_cross_attention: bool = field(
         default=False, metadata={"help": "do not perform cross-attention"}
     )
     cross_self_attention: bool = field(
         default=False, metadata={"help": "perform cross+self-attention"}
     )
-    # args for Training with Quantization Noise for Extreme Model Compression ({Fan*, Stock*} et al., 2020)
-    quant_noise: QuantNoiseConfig = field(default=QuantNoiseConfig())
+    quant_noise: QuantNoiseConfig = field(default_factory=QuantNoiseConfig)
     min_params_to_wrap: int = field(
         default=DEFAULT_MIN_PARAMS_TO_WRAP,
         metadata={
@@ -2408,12 +2402,10 @@ class TransformerConfig:
             "--offload-activations are passed."
         },
     )
-    # DEPRECATED field, but some old checkpoints might have it
     char_inputs: bool = field(
         default=False, metadata={"help": "if set, model takes character ids as input"}
     )
     relu_dropout: float = 0.0
-    # config for "BASE Layers: Simplifying Training of Large, Sparse Models"
     base_layers: Optional[int] = field(
         default=0, metadata={"help": "number of BASE layers in total"}
     )
@@ -2424,22 +2416,14 @@ class TransformerConfig:
         default=1,
         metadata={"help": "shuffle tokens between workers before computing assignment"},
     )
-
     export: bool = field(
         default=False,
         metadata={"help": "make the layernorm exportable with torchscript."},
     )
-
-    # copied from transformer_lm but expected in transformer_decoder:
     no_decoder_final_norm: bool = field(
         default=False,
         metadata={"help": "don't add an extra layernorm after the last decoder block"},
     )
-
-    # We need to make this hierarchical dataclass like the flat namespace
-    # __getattr__ and __setattr__ here allow backward compatibility
-    # for subclasses of Transformer(Legacy) that depend on read/write on
-    # the flat namespace.
 
     def __getattr__(self, name):
         match = re.match(_NAME_PARSER, name)
@@ -2458,14 +2442,8 @@ class TransformerConfig:
 
     @staticmethod
     def _copy_keys(args, cls, prefix, seen):
-        """
-        copy the prefixed keys (decoder_embed_dim) to the DC fields: decoder.embed_dim
-        """
         cfg = cls()
         for fld in fields(cls):
-            # for all the fields in the DC, find the fields (e.g. embed_dim)
-            # in the namespace with the prefix (e.g. decoder)
-            # and set it on the dc.
             args_key = f"{prefix}_{fld.name}"
             if safe_hasattr(args, args_key):
                 seen.add(args_key)
@@ -2482,17 +2460,9 @@ class TransformerConfig:
         if not isinstance(args, cls):
             seen = set()
             config = cls()
-            # currently, we can go generically from DC fields to args hierarchically
-            # but we can't easily deconstruct a flat namespace to a hierarchical
-            # DC. Mostly because we could have a sub-dc called `decoder-foo` that should not
-            # go to the sub struct called `decoder`. There are ways to go around this, but let's keep it simple
-            # for now.
             for fld in fields(cls):
-                # concretelly, the transformer_config know what sub-dc it has, so we go through all the dc fields
-                # and if it's one that has a sub-dc, we build that sub-dc with `copy_keys()`
                 if fld.name == "decoder":
                     if safe_hasattr(args, "decoder"):
-                        #  in some cases, the args we receive is already structured (as DictConfigs), so let's just build the correct DC
                         seen.add("decoder")
                         config.decoder = DecoderConfig(**args.decoder)
                     else:
@@ -2500,41 +2470,6 @@ class TransformerConfig:
                             args, DecoderConfig, "decoder", seen
                         )
                 elif fld.name == "encoder":
-                    # same but for encoder
                     if safe_hasattr(args, "encoder"):
                         seen.add("encoder")
                         config.encoder = EncDecBaseConfig(**args.encoder)
-                    else:
-                        config.encoder = cls._copy_keys(
-                            args, EncDecBaseConfig, "encoder", seen
-                        )
-                elif fld.name == "quant_noise":
-                    # same but for quant_noise
-                    if safe_hasattr(args, "quant_noise"):
-                        seen.add("quant_noise")
-                        config.quant_noise = QuantNoiseConfig(**args.quant_noise)
-                    else:
-                        config.quant_noise = cls._copy_keys(
-                            args, QuantNoiseConfig, "quant_noise", seen
-                        )
-                elif safe_hasattr(args, fld.name):
-                    # if it's not a structure field, it's just a normal field, copy it over
-                    seen.add(fld.name)
-                    setattr(config, fld.name, safe_getattr(args, fld.name))
-            # we got all the fields defined in the dataclass, but
-            # the argparse namespace might have extra args for two reasons:
-            #   - we are in a legacy class so all the args are not declared in the dataclass. Ideally once everyone has defined a dataclass for their model, we won't need this
-            #   - some places expect args to be there but never define them
-            args_dict = (
-                args._asdict()
-                if safe_hasattr(args, "_asdict")
-                else vars(args)
-                if safe_hasattr(args, "__dict__")
-                else {}
-            )  # namedtupled doesn't have __dict__ :-/
-            for key, value in args_dict.items():
-                if key not in seen:
-                    setattr(config, key, value)
-            return config
-        else:
-            return args

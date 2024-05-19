@@ -162,6 +162,9 @@ def main():
     if args.cache_dir is not None:
         torch.hub.set_dir(args.cache_dir)
 
+    # Set device
+    device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
+    
     # When torch.distributed.launch is used
     if args.local_rank is not None:
         torch.cuda.set_device(args.local_rank)
@@ -211,6 +214,10 @@ def main():
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
+    print(f'Using device: {device}')
+    print(f'Using backend: {args.backend}')
+
+    # Pass the device to the Runner
     runner = Runner(args, config)
     eval(f'runner.{args.mode}')()
 
